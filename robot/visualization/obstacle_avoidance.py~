@@ -1,0 +1,134 @@
+"""
+Модуль с реализацией алгоритма обхода препятствий.
+"""
+import math
+from typing import Tuple, Optional
+
+from interfaces.robot_interface import RobotInterface
+
+
+class ObstacleAvoidance:
+    
+    def __init__(self, visualizer, robot: RobotInterface):
+        self.visualizer = visualizer
+        self.robot = robot
+        
+        self.is_avoiding = False
+        
+        # Целевое направление обхода
+        self.target_direction: Optional[Tuple[float, float]] = None
+    
+    def check_and_avoid_obstacles(self) -> bool:
+        """
+        Проверяет наличие препятствий и выполняет их обход при необходимости.
+        
+        Returns:
+            bool: True, если робот находится в режиме обхода препятствия, иначе False
+        """
+        # Получаем текущую позицию и размеры робота
+        x, y, theta = self.robot.get_position()
+        width, length = self.robot.get_robot_dimensions()
+        
+        # Проверяем, есть ли столкновение с препятствием
+        if self.check_collision(x, y, width, length):
+            # Получаем вектор направления для обхода
+            avoidance_vector = self.get_avoidance_vector(x, y, theta)
+            
+            if avoidance_vector and (avoidance_vector[0] != 0 or avoidance_vector[1] != 0):
+                # Устанавливаем флаг обхода и целевое направление
+                self.is_avoiding = True
+                self.target_direction = avoidance_vector
+                
+                # Вычисляем угол между текущим направлением робота и вектором обхода
+                target_angle = math.atan2(avoidance_vector[1], avoidance_vector[0])
+                angle_diff = target_angle - theta
+                
+                # Нормализуем разницу углов в диапазоне [-π, π]
+                while angle_diff > math.pi:
+                    angle_diff -= 2 * math.pi
+                while angle_diff < -math.pi:
+                    angle_diff += 2 * math.pi
+                
+                # Определяем скорости колес для обхода препятствия
+                if abs(angle_diff) > math.pi / 4:
+                    # Если угол большой, сначала поворачиваем
+                    turn_direction = 1 if angle_diff > 0 else -1
+                    self.robot.set_wheel_speeds(
+                        -self.robot.get_max_speed() * turn_direction,
+                        self.robot.get_max_speed() * turn_direction
+                    )
+                else:
+                    # Иначе двигаемся с поворотом
+                    turn_factor = angle_diff / (math.pi / 4)  # Нормализуем в диапазоне [-1, 1]
+                    left_speed = self.robot.get_max_speed() * (1 - turn_factor)
+                    right_speed = self.robot.get_max_speed() * (1 + turn_factor)
+                    self.robot.set_wheel_speeds(left_speed, right_speed)
+                
+                return True
+            else:
+                # Если вектор обхода не определен, останавливаем робота
+                self.robot.set_wheel_speeds(0.0, 0.0)
+                self.is_avoiding = True # Устанавливаем флаг, чтобы показать, что робот столкнулся
+                return True # Возвращаем True, так как столкновение обработано (остановкой)
+        else:
+            # Если нет столкновения, сбрасываем флаг обхода
+            self.is_avoiding = False
+            self.target_direction = None
+        
+        return False
+    
+    def check_collision(self, x: float, y: float, width: float, height: float) -> bool:
+        """
+        Проверяет, сталкивается ли объект с каким-либо препятствием.
+        
+        Args:
+            x: X-координата объекта
+            y: Y-координата объекта
+            width: Ширина объекта
+            height: Высота объекта
+            
+        Returns:
+            bool: True, если объект сталкивается с каким-либо препятствием, иначе False
+        """
+        if not self.visualizer or not hasattr(self.visualizer, 'obstacles'):
+            return False
+            
+        for obstacle in self.visualizer.obstacles:
+            if obstacle.is_colliding(x, y, width, height):
+                return True
+        return False
+    
+    def get_avoidance_vector(self, x: float, y: float, theta: float) -> Tuple[float, float]:
+        """
+        Возвращает вектор направления для обхода ближайшего препятствия.
+        
+        Args:
+            x: X-координата объекта
+            y: Y-координата объекта
+            theta: Ориентация объекта в радианах
+            
+        Returns:
+            Tuple[float, float]: Вектор направления обхода (dx, dy) или (0, 0), если обход не требуется
+        """
+        if not self.visualizer or not hasattr(self.visualizer, 'obstacles'):
+            return 0.0, 0.0
+            
+        # Находим ближайшее препятствие
+        nearest_obstacle = None
+        min_distance = float('inf')
+        
+        for obstacle in self.visualizer.obstacles:
+            obs_x, obs_y = obstacle.get_position()
+            distance = math.sqrt((x - obs_x)**2 + (y - obs_y)**2)
+            
+            if distance < min_distance:
+                min_distance = distance
+                nearest_obstacle = obstacle
+        
+        # Если есть ближайшее препятствие, получаем вектор обхода
+        if nearest_obstacle:
+            avoidance_dir = nearest_obstacle.get_avoidance_direction(x, y, theta)
+            if avoidance_dir:
+                return avoidance_dir
+        
+        return 0.0, 0.0

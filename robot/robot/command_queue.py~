@@ -1,0 +1,54 @@
+from typing import List, Optional
+
+from interfaces.command_interface import CommandInterface
+from interfaces.robot_interface import RobotInterface
+from robot.commands.stop_command import StopCommand
+
+
+class CommandQueue:
+    def __init__(self):
+        self.commands: List[CommandInterface] = []
+        self.active_command: Optional[CommandInterface] = None
+        print("[Очередь] Инициализирована очередь команд")
+
+    def add_command(self, command: CommandInterface) -> None:
+        if isinstance(command, StopCommand):
+            self.clear()
+            self.active_command = command
+            print(f"[Очередь] Добавлена экстренная команда: {command.get_description()}")
+            return
+        self.commands.append(command)
+        print(f"[Очередь] Добавлена команда: {command.get_description()}")
+
+    def get_active_command(self) -> Optional[CommandInterface]:
+        return self.active_command
+
+    def update(self, robot: RobotInterface) -> None:
+        if robot.is_collided:
+            return
+
+        if self.active_command and self.active_command.check_completion():
+            print(f"[Очередь] Завершена команда: {self.active_command.get_description()}")
+            self.active_command = None
+
+        if not self.active_command and self.commands:
+            self.active_command = self.commands.pop(0)
+            print(f"[Очередь] Начато выполнение: {self.active_command.get_description()}")
+
+        if self.active_command:
+            try:
+                # Метод execute теперь может вернуть True, и мы сразу же завершим команду
+                if self.active_command.execute(robot):
+                    print(f"[Очередь] Завершена команда: {self.active_command.get_description()}")
+                    self.active_command = None
+            except Exception as e:
+                print(f"[Очередь] Ошибка при выполнении команды: {e}")
+                self.active_command = None
+
+    def clear(self) -> None:
+        self.commands.clear()
+        self.active_command = None
+        print("[Очередь] Очередь команд очищена")
+
+    def is_empty(self) -> bool:
+        return not self.commands and not self.active_command

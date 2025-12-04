@@ -1,0 +1,110 @@
+from typing import Optional, Tuple
+import math
+import time
+from interfaces.command_interface import CommandInterface
+from interfaces.robot_interface import RobotInterface
+
+
+class TurnCommand(CommandInterface):
+    """Команда поворота с улучшенным PID-регулятором для надежной остановки."""
+    # Коэффициенты PID-регулятора по УГЛУ
+    KP = 4.0  # Немного уменьшен для более мягкой реакции
+    KI = 0.5  # Уменьшен для снижения риска перерегулирования
+    KD = 0.1  # Значительно увеличен для сильного демпфирования (торможения)
+    MAX_INTEGRAL = 0.5
+    ANGLE_TOLERANCE = 0.001
+    VELOCITY_TOLERANCE = 0.001
+
+    @property
+    def priority(self) -> int:
+        return 1
+
+    def __init__(self, angular_speed: float, angle: Optional[float] = None):
+        if angular_speed == 0 and angle is not None:
+            raise ValueError("Значения не заданы.")
+
+        self.direction_sign = math.copysign(1, angular_speed) if angular_speed != 0 else 1.0
+        self.max_speed = abs(angular_speed)
+        self.target_angle_delta = abs(angle) if angle is not None else None
+
+        self.start_theta, self.final_target_theta = None, None
+        self.is_complete = False
+        self.integral_error = 0.0
+        self.last_time = None
+
+    def execute(self, robot: RobotInterface) -> bool:
+        current_time = time.time()
+        dt = (current_time - self.last_time) if self.last_time is not None else 1.0 / 60.0
+        self.last_time = current_time
+
+        _, _, current_theta = robot.get_position()
+        _, current_angular_velocity = robot.get_chassis_velocities()
+
+        if self.target_angle_delta is not None:
+            # --- РЕЖИМ: ПОВОРОТ НА УГОЛ ---
+            if self.start_theta is None:
+                self.start_theta = current_theta
+                turn_rads = self.target_angle_delta * self.direction_sign
+                self.final_target_theta = (self.start_theta + turn_rads + math.pi) % (2 * math.pi) - math.pi
+
+            angle_error = (self.final_target_theta - current_theta + math.pi) % (2 * math.pi) - math.pi
+
+            if abs(angle_error) < self.ANGLE_TOLERANCE and abs(current_angular_velocity) < self.VELOCITY_TOLERANCE:
+                robot.set_chassis_forces(0.0, 0.0)
+                self.is_complete = True
+                return True
+
+            self.integral_error += angle_error * dt
+            if abs(angle_error) < 0.05:
+                self.integral_error = 0
+            self.integral_error = max(-self.MAX_INTEGRAL, min(self.MAX_INTEGRAL, self.integral_error))
+
+            p_term = self.KP * angle_error
+            i_term = self.KI * self.integral_error
+            d_term = -self.KD * current_angular_velocity
+
+            # Итоговый крутящий момент от PID-регулятора.
+            # Удалена некорректная логика ограничения скорости, мешавшая плавной остановке.
+            angular_torque = p_term + i_term + d_term
+
+        else:
+            # --- РЕЖИМ: НЕПРЕРЫВНОЕ ВРАЩЕНИЕ ---
+            speed_error = self.max_speed - abs(current_angular_velocity)
+
+            self.integral_error += speed_error * dt
+            self.integral_error = max(-self.MAX_INTEGRAL, min(self.MAX_INTEGRAL, self.integral_error))
+
+            p_term = self.KP * speed_error
+            i_term = self.KI * self.integral_error
+
+            angular_torque = (p_term + i_term) * self.direction_sign
+
+        robot.set_chassis_forces(0.0, angular_torque)
+        return self.is_complete
+
+    def check_completion(self) -> bool:
+        return self.is_complete
+
+    def get_description(self) -> str:
+        direction = "влево" if self.direction_sign > 0 else "вправо"
+        if self.target_angle_delta is not None:
+            return f"Поворот {direction} на {math.degrees(self.target_angle_delta):.1f}°"
+        else:
+            return f"Непрерывное вращение {direction} со скоростью {self.max_speed:.1f} рад/с"
+
+    def get_target_pose(self, robot: RobotInterface) -> Optional[Tuple[float, float, Optional[float]]]:
+        rx, ry, current_theta = robot.get_position()
+
+        # Если это команда поворота на заданный угол, у нее есть цель
+        if self.target_angle_delta is not None:
+            # Если команда уже начала выполняться, у нас есть вычисленный `final_target_theta`
+            if self.final_target_theta is not None:
+                return rx, ry, self.final_target_theta
+
+            # Если команда еще не началась, вычисляем гипотетическую цель из текущего положения
+            turn_rads = self.target_angle_delta * self.direction_sign
+            target_theta = (current_theta + turn_rads + math.pi) % (2 * math.pi) - math.pi
+            return rx, ry, target_theta
+
+        # Для непрерывного вращения определенной цели нет
+        return None

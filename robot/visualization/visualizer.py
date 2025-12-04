@@ -1,0 +1,286 @@
+"""
+Модуль с реализацией визуализатора робота.
+"""
+import math
+import time
+import os
+from typing import Tuple, List
+
+import pygame
+
+from interfaces.visualizer_interface import VisualizerInterface
+from interfaces.robot_interface import RobotInterface
+from robot.commands.move_command import MoveCommand
+from robot.commands.stop_command import StopCommand
+from robot.commands.turn_command import TurnCommand
+from visualization.obstacles import Obstacle
+from visualization.text_drawer import TextDrawer
+from robot.command_queue import CommandQueue
+
+
+class RobotVisualizer(VisualizerInterface):
+    """Реализация визуализатора робота с использованием pygame."""
+
+    def __init__(
+        self,
+        robot: RobotInterface,
+        command_queue: CommandQueue,
+        window_size: Tuple[int, int] = (1024, 768),
+        scale_factor: float = 100.0,
+        text_color: Tuple[int, int, int] = (0, 0, 0),
+        background_color: Tuple[int, int, int] = (255, 255, 255),
+        grid_color: Tuple[int, int, int] = (200, 200, 200),
+        grid_size: int = 50
+    ):
+        self.robot = robot
+        self.command_queue = command_queue
+        self.window_size = window_size
+        self.scale_factor = scale_factor
+        self.text_color = text_color
+        self.background_color = background_color
+        self.grid_color = grid_color
+        self.grid_size = grid_size
+
+        self.obstacles: List[Obstacle] = []
+        self.running = False
+        self.last_update_time = 0
+        self.camera_offset_x, self.camera_offset_y = 0, 0
+        self.camera_boundary_percent = 0.2
+
+        pygame.init()
+        self.screen = pygame.display.set_mode(window_size)
+        pygame.display.set_caption("Симуляция робота")
+        self.clock = pygame.time.Clock()
+
+        font_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources", "Monocraft.otf")
+        self.font_path = font_path if os.path.exists(font_path) else None
+
+        if self.font_path:
+            self.info_drawers = [TextDrawer(self.font_path, 16, self.text_color, None, (10, 10 + i * 20)) for i in range(8)]
+        else:
+            self.font = pygame.font.SysFont("Arial", 16)
+
+        self.robot_image_original = None
+        try:
+            image_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources", "robot.png")
+            if os.path.exists(image_path):
+                loaded_image = pygame.image.load(image_path).convert_alpha()
+                width_px = int(self.robot.width * self.scale_factor)
+                height_px = int(self.robot.length * self.scale_factor)
+                self.robot_image_original = pygame.transform.scale(loaded_image, (width_px, height_px))
+                print("[Визуализатор] Изображение робота успешно загружено.")
+            else:
+                print(f"[Визуализатор] Файл изображения робота не найден: {image_path}")
+        except pygame.error as e:
+            print(f"[Визуализатор] Ошибка загрузки изображения робота: {e}")
+
+        self.axis_len = 30
+        self.trail_points: List[Tuple[float, float]] = []
+        self.max_trail_length = 300
+
+        self.trail_color = (100, 100, 255)
+        self.target_color = (0, 200, 0)
+        self.robot_collide_color = (255, 0, 0)
+
+    def render(self) -> None:
+        self.screen.fill(self.background_color)
+        self._draw_grid()
+        self._draw_trail()
+        self._draw_obstacles()
+
+        x, y, theta = self.robot.get_position()
+        pixel_x, pixel_y = self._world_to_screen(x, y)
+        self._update_camera_offset(pixel_x, pixel_y)
+
+        self._draw_target()
+        self._draw_robot(x, y, theta)
+        self._draw_robot_axes(x, y, theta)
+        self._draw_info()
+
+        pygame.display.flip()
+
+    def _draw_robot_axes(self, x: float, y: float, theta: float):
+        """Рисует оси X (вперед) и Y (вправо) для робота."""
+        center_screen = self._world_to_screen(x, y)
+
+        forward_len = self.robot.length * 0.75
+        end_x_world = x + forward_len * math.cos(theta)
+        end_y_world = y + forward_len * math.sin(theta)
+        end_forward_screen = self._world_to_screen(end_x_world, end_y_world)
+        pygame.draw.aaline(self.screen, (255, 0, 0), center_screen, end_forward_screen, 2) # Красная
+
+        right_len = self.robot.width * 0.75
+        right_theta = theta - math.pi / 2
+        end_x_world = x + right_len * math.cos(right_theta)
+        end_y_world = y + right_len * math.sin(right_theta)
+        end_right_screen = self._world_to_screen(end_x_world, end_y_world)
+        pygame.draw.aaline(self.screen, (0, 255, 0), center_screen, end_right_screen, 2) # Зеленая
+
+    def _draw_robot(self, x: float, y: float, theta: float):
+        pixel_x, pixel_y = self._world_to_screen(x, y)
+
+        if self.robot_image_original:
+
+            angle_degrees = math.degrees(theta)
+
+            rotated_image = pygame.transform.rotate(self.robot_image_original, angle_degrees)
+
+            new_rect = rotated_image.get_rect(center=(pixel_x, pixel_y))
+            self.screen.blit(rotated_image, new_rect.topleft)
+        else:
+            # Запасной вариант отрисовки
+            width, length = self.robot.get_robot_dimensions()
+            color = (50, 50, 200)
+            hw, hl = width / 2, length / 2
+            local_corners = [(hl, -hw), (hl, hw), (-hl, hw), (-hl, -hw)]
+            cos_t, sin_t = math.cos(theta), math.sin(theta)
+            world_corners = [(x + lx*cos_t - ly*sin_t, y + lx*sin_t + ly*cos_t) for lx, ly in local_corners]
+            screen_corners = [self._world_to_screen(p[0], p[1]) for p in world_corners]
+            pygame.draw.polygon(self.screen, color, screen_corners)
+            pygame.draw.polygon(self.screen, (0,0,0), screen_corners, 2)
+
+        if self.robot.is_collided:
+            radius = int((self.robot.length * self.scale_factor) / 2.0 + 3)
+            pygame.draw.circle(self.screen, self.robot_collide_color, (pixel_x, pixel_y), radius, 3)
+
+    def _draw_info(self):
+        x, y, theta = self.robot.get_position()
+        lw, rw = self.robot.get_wheel_speeds()
+        tlw, trw = self.robot.get_target_wheel_speeds()
+        state = "НОРМА"
+        if self.robot.is_collided:
+            state = "АВАРИЯ (Нажмите 'C' для сброса)"
+
+        active_cmd = self.command_queue.get_active_command()
+        cmd_text = active_cmd.get_description() if active_cmd else "Ожидание"
+        info = [
+            f"Позиция: ({x:.2f}, {y:.2f}) м", f"Угол: {math.degrees(theta):.1f}°",
+            f"Скор. колес Л/П: {lw:.2f}/{rw:.2f}", #f"Цель. скор. Л/П: {tlw:.2f}/{trw:.2f}",
+            f"Препятствий: {len(self.obstacles)}", f"Состояние: {state}", f"Команда: {cmd_text}",
+            f"Очередь: {len(self.command_queue.commands)} команд"
+        ]
+        if hasattr(self, 'info_drawers'):
+            for i, text in enumerate(info):
+                if i < len(self.info_drawers): self.info_drawers[i].draw(self.screen, text)
+        else:
+            for i, text in enumerate(info):
+                surf = self.font.render(text, True, self.text_color)
+                self.screen.blit(surf, (10, 10 + i * 20))
+
+    def _draw_target(self):
+        ac = self.command_queue.get_active_command()
+        if ac:
+            target_pose = ac.get_target_pose(self.robot)
+            if target_pose:
+                tx, ty, t_theta = target_pose
+                ptx, pty = self._world_to_screen(tx, ty)
+
+                pygame.draw.line(self.screen, self.target_color, (ptx - 8, pty - 8), (ptx + 8, pty + 8), 2)
+                pygame.draw.line(self.screen, self.target_color, (ptx - 8, pty + 8), (ptx + 8, pty - 8), 2)
+
+                if t_theta is not None:
+                    end_x = ptx + 20 * math.cos(t_theta)
+                    end_y = pty - 20 * math.sin(t_theta)
+                    pygame.draw.line(self.screen, self.target_color, (ptx, pty), (end_x, end_y), 2)
+
+                robot_pixel_pos = self._world_to_screen(self.robot.x, self.robot.y)
+                pygame.draw.aaline(self.screen, self.target_color, robot_pixel_pos, (ptx, pty))
+
+    def add_obstacle(self, x, y, width, height, color=(120,120,120)):
+        obstacle = Obstacle(x, y, width, height, color=color)
+        self.obstacles.append(obstacle); self.robot.set_obstacles(self.obstacles)
+
+    def _world_to_screen(self, x, y):
+        cx, cy = self.window_size[0]//2, self.window_size[1]//2
+        return cx + int(x*self.scale_factor) - self.camera_offset_x, cy - int(y*self.scale_factor) - self.camera_offset_y
+
+    def _screen_to_world(self, px, py):
+        cx, cy = self.window_size[0]//2, self.window_size[1]//2
+        return (px-cx+self.camera_offset_x)/self.scale_factor, -(py-cy+self.camera_offset_y)/self.scale_factor
+
+    def _draw_obstacles(self):
+        for o in self.obstacles:
+            ox, oy = o.get_position(); w, h = o.get_dimensions()
+            px, py = self._world_to_screen(ox, oy)
+            pw, ph = int(w*self.scale_factor), int(h*self.scale_factor)
+            rect = pygame.Rect(px - pw//2, py - ph//2, pw, ph)
+            pygame.draw.rect(self.screen, o.get_color(), rect)
+            pygame.draw.rect(self.screen, (0,0,0), rect, 2)
+
+    def update(self):
+        ct = time.time()
+        if self.last_update_time == 0: self.last_update_time = ct; return
+        dt = min(ct - self.last_update_time, 0.1); self.last_update_time = ct
+        self.robot.update(dt)
+        nx, ny, _ = self.robot.get_position()
+        if not self.trail_points or (nx != self.trail_points[-1][0] or ny != self.trail_points[-1][1]):
+            self.trail_points.append((nx, ny))
+        if len(self.trail_points) > self.max_trail_length: self.trail_points.pop(0)
+
+    def start(self, cb):
+        self.running, self.last_update_time = True, time.time()
+        try:
+            while self.running:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT: self.running = False
+                    elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1: self._handle_mouse_click(event.pos)
+                    elif event.type == pygame.KEYDOWN: self._handle_key_event(event.key)
+                cb(); self.update(); self.render(); self.clock.tick(60)
+        finally: self.stop()
+
+    def _handle_mouse_click(self, pos):
+        tx, ty = self._screen_to_world(pos[0], pos[1])
+        rx, ry, rth = self.robot.get_position()
+        self.command_queue.clear()
+        dx, dy = tx - rx, ty - ry
+
+        # Угол до цели в мировой системе координат
+        target_angle_world = math.atan2(dy, dx)
+        # Угол, на который нужно повернуться роботу (кратчайший путь)
+        turn_angle = (target_angle_world - rth + math.pi) % (2 * math.pi) - math.pi
+        dist = math.sqrt(dx ** 2 + dy ** 2)
+
+        if abs(turn_angle) > 0.1:
+            turn_speed = math.copysign(1.8, turn_angle)
+            # Угол для команды всегда положителен, направление задается скоростью
+            self.command_queue.add_command(TurnCommand(angle=abs(turn_angle), angular_speed=turn_speed))
+
+        if dist > 0.1:
+            self.command_queue.add_command(MoveCommand(distance=dist, linear_speed=1.0))
+
+    def _handle_key_event(self, key):
+        if key == pygame.K_UP: self.command_queue.add_command(MoveCommand(linear_speed=0.5, distance=1.0))
+        elif key == pygame.K_DOWN: self.command_queue.add_command(MoveCommand(linear_speed=-0.5, distance=-1.0))
+        elif key == pygame.K_LEFT: self.command_queue.add_command(TurnCommand(angle=math.pi/2, angular_speed=1.8))
+        elif key == pygame.K_RIGHT: self.command_queue.add_command(TurnCommand(angle=-math.pi/2, angular_speed=-1.8))
+        elif key == pygame.K_SPACE: self.command_queue.add_command(StopCommand())
+        elif key == pygame.K_c:
+            self.command_queue.clear()
+            self.robot.is_collided = False
+            self.robot.set_chassis_forces(0.0, 0.0); print("Очередь очищена, состояние робота сброшено.")
+            self.robot.__dict__["x"] = 0
+            self.robot.__dict__["y"] = 0
+        elif key == pygame.K_o:
+            import random; x,y = random.uniform(-5,5),random.uniform(-5,5); w,h = random.uniform(0.5,1.5),random.uniform(0.5,1.5)
+            self.add_obstacle(x,y,w,h)
+        elif key == pygame.K_p:
+            if self.obstacles: self.obstacles.pop(); self.robot.set_obstacles(self.obstacles)
+
+    def stop(self): self.running=False; pygame.quit(); print("Визуализатор остановлен.")
+
+    def _update_camera_offset(self, px, py):
+        bx, by = int(self.window_size[0]*self.camera_boundary_percent), int(self.window_size[1]*self.camera_boundary_percent)
+        if px < bx: self.camera_offset_x -= (bx-px)
+        elif px > self.window_size[0]-bx: self.camera_offset_x += (px-(self.window_size[0]-bx))
+        if py < by: self.camera_offset_y -= (by-py)
+        elif py > self.window_size[1]-by: self.camera_offset_y += (py-(self.window_size[1]-by))
+
+    def _draw_grid(self):
+        w,h = self.window_size; ox,oy = self.camera_offset_x%self.grid_size, self.camera_offset_y%self.grid_size
+        for x in range(-ox,w,self.grid_size): pygame.draw.line(self.screen,self.grid_color,(x,0),(x,h))
+        for y in range(-oy,h,self.grid_size): pygame.draw.line(self.screen,self.grid_color,(0,y),(w,y))
+
+    def _draw_trail(self):
+        if len(self.trail_points) > 1:
+            screen_points = [self._world_to_screen(p[0],p[1]) for p in self.trail_points]
+            pygame.draw.lines(self.screen,self.trail_color,False,screen_points,2)

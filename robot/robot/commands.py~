@@ -1,0 +1,286 @@
+"""
+"""
+import math
+from typing import Optional
+
+from interfaces.command_interface import CommandInterface
+from interfaces.robot_interface import RobotInterface
+
+
+class MoveCommand(CommandInterface):
+    """Команда для движения робота."""
+    
+    def __init__(self, linear_speed: float = 0.5, angular_speed: float = 0.0, distance: Optional[float] = None):
+        """
+        Инициализирует команду движения.
+        
+        Args:
+            linear_speed: Линейная скорость в м/с
+            angular_speed: Угловая скорость в рад/с
+            distance: Расстояние для движения в метрах (None для непрерывного движения)
+        """
+        self.linear_speed = linear_speed
+        self.angular_speed = angular_speed
+        self.distance = distance
+        self.traveled_distance = 0.0
+        self.start_x = None
+        self.start_y = None
+        self.start_theta = None
+        self.is_complete = False
+
+    def execute(self, robot: RobotInterface) -> bool:
+        """
+        Выполняет команду, применяя её к роботу.
+        
+        Args:
+            robot: Робот, к которому применяется команда
+            
+        Returns:
+            bool: True, если команда завершена, False, если команда продолжается
+        """
+        # Если это первое выполнение команды, запоминаем начальную позицию и ориентацию
+        if self.start_x is None or self.start_y is None or self.start_theta is None:
+            x, y, theta = robot.get_position()
+            self.start_x = x
+            self.start_y = y
+            self.start_theta = theta
+        
+        # Получаем текущую позицию и ориентацию
+        x, y, theta = robot.get_position()
+        
+        # Если задано расстояние, проверяем, не достигли ли мы его
+        if self.distance is not None:
+            # Вычисляем пройденное расстояние
+            self.traveled_distance = math.sqrt((x - self.start_x) ** 2 + (y - self.start_y) ** 2)
+            
+            # Если достигли заданного расстояния, останавливаем робота и завершаем команду
+            if self.traveled_distance >= self.distance:
+                robot.set_wheel_speeds(0.0, 0.0)
+                return True
+        
+        # Преобразуем линейную и угловую скорости в скорости колес
+        # с учетом текущей ориентации робота
+        width = robot.get_robot_dimensions()[0]
+        
+        # Применяем скорости относительно текущей ориентации робота
+        left_speed = self.linear_speed - (self.angular_speed * width / 2)
+        right_speed = self.linear_speed + (self.angular_speed * width / 2)
+        
+        # Устанавливаем скорости колес
+        robot.set_wheel_speeds(left_speed, right_speed)
+        
+        # Если расстояние не задано, команда никогда не завершается
+        return False
+    
+    def get_description(self) -> str:
+        """
+        Возвращает описание команды.
+        
+        Returns:
+            str: Текстовое описание команды
+        """
+        if self.distance is not None:
+            return f"Движение на {self.distance} м: линейная скорость={self.linear_speed} м/с, угловая скорость={self.angular_speed} рад/с"
+        else:
+            return f"Движение: линейная скорость={self.linear_speed} м/с, угловая скорость={self.angular_speed} рад/с"
+
+
+class StopCommand(CommandInterface):
+    """Команда для остановки робота."""
+    
+    def execute(self, robot: RobotInterface) -> bool:
+        """
+        Выполняет команду, применяя её к роботу.
+        
+        Args:
+            robot: Робот, к которому применяется команда
+            
+        Returns:
+            bool: True, так как команда всегда завершается сразу
+        """
+        robot.set_wheel_speeds(0.0, 0.0)
+        return True
+    
+    def get_description(self) -> str:
+        """
+        Возвращает описание команды.
+        
+        Returns:
+            str: Текстовое описание команды
+        """
+        return "Остановка"
+
+
+class TurnCommand(CommandInterface):
+    """Команда для поворота робота."""
+    
+    def __init__(self, angular_speed: float = 0.5, angle: Optional[float] = None):
+        """
+        Инициализирует команду поворота.
+        
+        Args:
+            angular_speed: Угловая скорость в рад/с (положительная - поворот вправо, отрицательная - влево)
+            angle: Угол поворота в радианах (None для непрерывного поворота)
+        """
+        self.angular_speed = angular_speed
+        self.angle = angle
+        self.start_theta = None
+        self.target_theta = None
+        self.initial_direction = None
+    
+    def execute(self, robot: RobotInterface) -> bool:
+        """
+        Выполняет команду, применяя её к роботу.
+        
+        Args:
+            robot: Робот, к которому применяется команда
+            
+        Returns:
+            bool: True, если команда завершена, False, если команда продолжается
+        """
+        # Если это первое выполнение команды, запоминаем начальную ориентацию
+        if self.start_theta is None:
+            _, _, theta = robot.get_position()
+            self.start_theta = theta
+            
+            # Определяем направление поворота
+            self.initial_direction = 1 if self.angular_speed > 0 else -1
+            
+            # Вычисляем целевой угол, если задан угол поворота
+            if self.angle is not None:
+                self.target_theta = (self.start_theta + self.angle) % (2 * math.pi)
+        
+        # Если задан угол поворота, проверяем, не достигли ли мы его
+        if self.angle is not None:
+            _, _, current_theta = robot.get_position()
+            
+            # Проверяем, достигли ли мы целевого угла
+            # Учитываем направление поворота и возможный переход через 0
+            if self._check_angle_reached(current_theta):
+                robot.set_wheel_speeds(0.0, 0.0)
+                return True
+        
+        # Преобразуем угловую скорость в скорости колес
+        width = robot.get_robot_dimensions()[0]
+        left_speed = -(self.angular_speed * width / 2)
+        right_speed = (self.angular_speed * width / 2)
+        
+        # Устанавливаем скорости колес
+        robot.set_wheel_speeds(left_speed, right_speed)
+        
+        # Если угол не задан, команда никогда не завершается
+        return False
+    
+    def _check_angle_reached(self, current_theta: float) -> bool:
+        """
+        Проверяет, достигнут ли целевой угол.
+        
+        Args:
+            current_theta: Текущий угол робота
+            
+        Returns:
+            bool: True, если целевой угол достигнут, иначе False
+        """
+        if self.target_theta is None:
+            return False
+        
+        # Вычисляем разницу между текущим и целевым углом
+        # с учетом возможного перехода через 0
+        diff = (current_theta - self.target_theta) % (2 * math.pi)
+        if diff > math.pi:
+            diff = 2 * math.pi - diff
+        
+        # Проверяем, достигли ли мы целевого угла с небольшой погрешностью
+        # Также учитываем направление поворота
+        if self.initial_direction > 0:  # Поворот вправо
+            # Проверяем, прошли ли мы целевой угол по часовой стрелке
+            passed = (current_theta - self.start_theta) % (2 * math.pi) >= (self.angle % (2 * math.pi))
+        else:  # Поворот влево
+            # Проверяем, прошли ли мы целевой угол против часовой стрелки
+            passed = (self.start_theta - current_theta) % (2 * math.pi) >= (abs(self.angle) % (2 * math.pi))
+        
+        return diff < 0.05 or passed
+    
+    def get_description(self) -> str:
+        """
+        Возвращает описание команды.
+        
+        Returns:
+            str: Текстовое описание команды
+        """
+        return self.is_complete
+
+
+class AvoidanceCommand(CommandInterface):
+    """Команда для обхода препятствий."""
+
+    def __init__(self, initial_direction: float, distance: float = 0.5):
+        """
+        Инициализирует команду обхода.
+        
+        Args:
+            initial_direction: Начальное направление движения (в радианах)
+            distance: Дистанция для обхода препятствия
+        """
+        self.initial_direction = initial_direction
+        self.distance = distance
+        self.current_distance = 0.0
+        self.linear_speed = 0.5  # Скорость обхода
+        self.start_x = None
+        self.start_y = None
+        
+    def get_description(self) -> str:
+        """Возвращает описание команды."""
+        return f"Обход препятствия: направление={self.initial_direction:.2f} рад"
+
+    def execute(self, robot: RobotInterface) -> bool:
+        """
+        Выполняет команду.
+        
+        Args:
+            robot: Робот, который выполняет команду
+            
+        Returns:
+            bool: True, если команда завершена, иначе False
+        """
+        # Получаем текущую позицию и ориентацию робота
+        x, y, theta = robot.get_position()
+        
+        # Если это первое выполнение команды, запоминаем начальную позицию
+        if self.start_x is None or self.start_y is None:
+            self.start_x = x
+            self.start_y = y
+        
+        # Вычисляем целевую позицию для обхода
+        target_x = x + math.cos(self.initial_direction) * self.distance
+        target_y = y + math.sin(self.initial_direction) * self.distance
+        
+        # Вычисляем вектор движения
+        dx = target_x - x
+        dy = target_y - y
+        
+        # Нормализуем вектор
+        length = (dx**2 + dy**2)**0.5
+        if length > 0:
+            dx /= length
+            dy /= length
+        
+        # Вычисляем угловую скорость для поворота в направлении движения
+        target_angle = self.initial_direction - theta
+        angular_speed = 0.5 * target_angle  # Пропорциональная регулировка
+        
+        # Устанавливаем скорости колес
+        robot.set_wheel_speeds(
+            self.linear_speed - angular_speed,
+            self.linear_speed + angular_speed
+        )
+        
+        # Обновляем пройденное расстояние
+        self.current_distance += self.linear_speed * 0.01  # dt = 0.01
+        
+        # Проверяем, завершена ли команда
+        return self.current_distance >= self.distance
+
+    def is_complete(self) -> bool:
+        """Проверяет, завершена ли команда."""
+        return self.current_distance >= self.distance

@@ -1,0 +1,74 @@
+"""
+Модуль с интерфейсами для робота.
+"""
+from abc import ABC, abstractmethod
+from typing import Tuple
+
+
+class RobotInterface(ABC):
+    """Абстрактный базовый класс для робота."""
+    
+    @abstractmethod
+    def set_wheel_speeds(self, left_speed: float, right_speed: float) -> None:
+        """
+        Устанавливает целевые скорости колес.
+        
+        Args:
+            left_speed: Скорость левого колеса в м/с
+            right_speed: Скорость правого колеса в м/с
+        """
+        pass
+    
+    @abstractmethod
+    def update(self, dt: float) -> None:
+        """
+        Обновляет состояние робота за временной шаг dt.
+        
+        Args:
+            dt: Временной шаг в секундах
+        """
+        pass
+    
+    @abstractmethod
+    def get_position(self) -> Tuple[float, float, float]:
+        """
+        Возвращает текущую позицию и ориентацию робота.
+        
+        Returns:
+            Кортеж (x, y, theta), где x, y - координаты в метрах, theta - ориентация в радианах
+        """
+        pass
+    
+    @abstractmethod
+    def get_wheel_speeds(self) -> Tuple[float, float]:
+        """
+        Возвращает текущие скорости колес.
+        
+        Returns:
+            Кортеж (left_wheel_speed, right_wheel_speed) в м/с
+        """
+        pass
+    
+    @abstractmethod
+    def get_target_wheel_speeds(self) -> Tuple[float, float]:
+        """
+        Возвращает целевые скорости колес.
+        
+        Returns:
+            Кортеж (target_left_wheel_speed, target_right_wheel_speed) в м/с
+        """
+        pass
+    
+    @abstractmethod
+    def get_robot_dimensions(self) -> Tuple[float, float]:
+        """
+        Возвращает размеры робота.
+        
+        Returns:
+            Кортеж (width, length) в метрах
+        """
+        pass
+
+    @abstractmethod
+    def get_max_speed(self) -> float:
+        pass
