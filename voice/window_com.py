@@ -6,9 +6,9 @@ class CommandsList(QtWidgets.QMainWindow):
         self._logger = logger
         super().__init__()
 
-        self.resize(300, 560)
-        #self._logger.info("Открыто окно команд")
-
+        # Устанавливаем минимальный размер, но позволяем окну растягиваться
+        self.setMinimumSize(400, 560)
+        
         self._NUMBER_WORDS = {
             'ноль': 0, 'нуль': 0, 'один': 1, 'одна': 1, 'одно': 1,
             'два': 2, 'две': 2, 'три': 3, 'четыре': 4, 'пять': 5,
@@ -27,71 +27,57 @@ class CommandsList(QtWidgets.QMainWindow):
         self.ALL_NUM_WORDS = set(self._NUMBER_WORDS.keys()) | set(self._SCALE_WORDS.keys())
 
         # --- Ключевые слова ---
-        # --- Движение ВПЕРЕД ---
         self.MOVE_FORWARD_KEYWORDS = {
-            # Основные
             'вперед', 'вперёд', 'прямо', 'ехать', 'проехать', 'двигаться', 'переместиться', 'идти',
         }
-
-        # --- Движение НАЗАД ---
 
         self.MOVE_BACKWARD_KEYWORDS = {
             'назад', 'отъехать', 'сдать', 'отступить', 'пятиться',
             'отъезжай', 'откатись', 'сдай назад', 'двигай назад', 'задний ход',
         }
 
-        # --- Общие команды ПОВОРОТА ---
         self.TURN_KEYWORDS = {
             'повернуть', 'развернуться', 'крутиться', 'поворот',
             'поверни', 'повернись', 'разверни', 'развернись', 'крутись', 'покрутись', 'вертись',
             'вращайся', 'поворачивай', 'разворачивайся', 'вращение',
         }
 
-        # --- Направление ВЛЕВО ---
         self.TURN_LEFT_KEYWORDS = {
             'налево', 'влево', 'левее', 'левую', 'левый', 'лево', 'на лево'
         }
 
-        # --- Направление ВПРАВО ---
         self.TURN_RIGHT_KEYWORDS = {
             'направо', 'вправо', 'правее', 'правую', 'правый', 'право', 'на право'
         }
 
-        # --- Команды ОСТАНОВКИ ---
         self.STOP_KEYWORDS = {
             'стоп', 'стоять', 'остановиться', 'остановка', 'замереть', 'прекратить', 'тормози', 'стой',
             'замри', 'тормоз', 'отставить',
         }
 
-        # --- Увеличение СКОРОСТИ ---
         self.SPEED_FASTER_KEYWORDS = {
             'быстро', 'быстрее', 'побыстрее', 'скорее', 'резче', 'ускориться', 'живо', 'поживее',
             'быстрей', 'скорей', 'ускорься', 'давай быстрее', 'шустрее',
         }
 
-        # --- Уменьшение СКОРОСТИ ---
         self.SPEED_SLOWER_KEYWORDS = {
             'медленно', 'медленнее', 'помедленнее', 'плавно', 'тише', 'потише', 'неспеша', 'не спеша',
             'замедлись', 'притормози', 'сбавь скорость',
             'тихий ход', 'минимальная', 'спокойнее', 'аккуратнее', 'осторожнее'
         }
 
-        # --- Единицы измерения: МЕТРЫ ---
         self.DISTANCE_UNITS_M = {
             'метр', 'м', 'метра', 'метров'
         }
 
-        # --- Единицы измерения: САНТИМЕТРЫ ---
         self.DISTANCE_UNITS_CM = {
             'сантиметр', 'см', 'сантиметра', 'сантиметров'
         }
 
-        # --- Единицы измерения: ГРАДУСЫ ---
         self.ANGLE_UNITS = {
             'градус', 'град', 'градуса', 'градусов'
         }
 
-        # --- Примеры команд ---
         self.COMMANDS_TEMPLATE = {
             "Повернись на <i><b>{n}</b></i> градусов",
             "Проедь <i><b>{n}</b></i> метров/сантиметров вперед/назад",
@@ -99,7 +85,10 @@ class CommandsList(QtWidgets.QMainWindow):
             "Езжай вперед/назад",
             "Ускорься/замедлись"
         }
+        
         self.tab_widget = QtWidgets.QTabWidget()
+        # Делаем табы растягиваемыми
+        self.tab_widget.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
 
         self.move_widget = InfoTabWindow(
             ["Вперед", "Назад", "Остановка"],
@@ -135,74 +124,67 @@ class InfoTabWindow(QtWidgets.QWidget):
     def __init__(self, names, *args):
         super().__init__()
         
-        layout = QtWidgets.QVBoxLayout()
+        layout = QtWidgets.QGridLayout()
         layout.setSpacing(0)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(5, 5, 5, 5) 
         
-        # Создаем горизонтальный контейнер для колонок
-        columns_widget = QtWidgets.QWidget()
-        columns_layout = QtWidgets.QHBoxLayout()
-        columns_layout.setSpacing(0)
-        columns_layout.setContentsMargins(0, 0, 0, 0)
-        columns_widget.setLayout(columns_layout)
+        max_rows = max(len(arg) for arg in args)
         
         for i in range(len(names)):
-            # Создаем вертикальную колонку
-            column_widget = QtWidgets.QWidget()
-            column_layout = QtWidgets.QVBoxLayout()
-            column_layout.setSpacing(0)
-            column_layout.setContentsMargins(0, 0, 0, 0)
-            column_widget.setLayout(column_layout)
-            
-            # Добавляем заголовок
-            title_label = TitleLabel(f"<b>{names[i]}</b>")
-            column_layout.addWidget(title_label)
-            
-            # Добавляем элементы
             t = list(args[i])
-            for item in t:
-                info_label = InfoLabel(item)
-                column_layout.addWidget(info_label)
             
-            # Добавляем растягивающий спейсер в конец колонки
-            column_layout.addStretch(1)
+            title_label = TitleLabel(f"<b>{names[i]}</b>")
+            layout.addWidget(title_label, 0, i)
             
-            # Добавляем колонку в горизонтальный layout
-            columns_layout.addWidget(column_widget)
+            for j in range(len(t)):
+                info_label = InfoLabel(t[j])
+                layout.addWidget(info_label, j + 1, i)
+            
+            for j in range(len(t) + 1, max_rows + 1):
+                spacer = QtWidgets.QWidget()
+                spacer.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
+                layout.addWidget(spacer, j, i)
         
-        # Добавляем растягивающий спейсер в конец горизонтального layout
-        columns_layout.addStretch(1)
+        for i in range(len(names)):
+            layout.setColumnStretch(i, 1)
         
-        layout.addWidget(columns_widget)
+        for j in range(1, max_rows + 2):
+            layout.setRowStretch(j, 1)
+            
         self.setLayout(layout)
 
 
 class TitleLabel(QtWidgets.QLabel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.setFixedHeight(40)
-        self.setMinimumWidth(200)
+        self.setMinimumHeight(40)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
         self.setStyleSheet('''
-                               background-color: lightblue;
-                               border: 1px solid #555;
-                               margin: 0px;
-                               padding: 0px;
-                           ''')
+            background-color: lightblue;
+            border: 1px solid #555;
+            margin: 0px;
+            padding: 5px;
+            font-size: 12px;
+        ''')
         self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
 
 
 class InfoLabel(QtWidgets.QLabel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.setFixedHeight(30)  # Фиксированная высота
-        self.setMinimumWidth(90)
-        self.setMaximumWidth(300)
+        self.setMinimumHeight(30)
+        
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
         self.setStyleSheet('''
-                               border: 1px solid #555;
-                               margin: 0px;
-                               padding: 0px;
-                           ''')
+            border: 1px solid #555;
+            border-radius: 5px;
+            margin: 2px;
+            padding: 5px;
+            font-size: 11px;
+        ''')
         self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        #
+        self.setWordWrap(True)
 
 
 if __name__ == "__main__":
